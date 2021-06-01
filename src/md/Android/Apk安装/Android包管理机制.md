@@ -2,7 +2,8 @@
 ==================
 
 ------
-##1.PackageManager简介：
+1.PackageManager简介：
+---
 他是PMS的管理类，用于想应用程序进程提供一些功能，PackageManager是一个抽象类，他的具体实现类为ApplicationPackageManager,ApplicationPackageManager中的方法会通过IpackageManager与AMS进行进程间通信，因此PackageManager所提供的功能最终是由PMS来实现的，这么设计主要用以是为了避免系统服务PMS直接被访问。PackageManager提供了一些功能，主要有以下几点：
 1. 获取一个应用程序的所有信息；
 2. 获取四大组件的信息；
@@ -10,7 +11,8 @@
 4. 获取包的信息；
 5. 安装、卸载APK。
 ------
-##2.PackageInstallerActivity解析：
+2.PackageInstallerActivity解析：
+---
 从功能上来说，PackageInstallerActivity才是应用安装起PackageInstaller真正的入口，PackagerInstallerActivity的onCreate防染如下所示。
 > packages/apps/PackageInstaller/src/com/android/packageinstaller/PackageInstallerActivity.java
 
@@ -180,7 +182,8 @@ private void startInstallConfirm() {
 3. PackageInstallerActivity会分别对package协议和File的Url进行处理，如果file协议会解析APK文件得到包信息PackageInfo。
 4. packageInstallerActivty中会对位置来源进行处理，如果允许安装位置来源活根据Intent判断得出该APK不是未知来源，就会初始化安装界面，如果管理员限制来自未知的安装，就会弹出提示Dialog或者跳转到设置界面。
 ------
-##3.PackageInstaller中的处理：
+3.PackageInstaller中的处理：
+---
 在PackageInstallerActivity调用startInstallConfirm方法初始化安装界面后，这个安装确认界面就会呈现给用户，用户如果想要安装这个应用程序就会点击确定按钮，就会调用PackageInstallerActivity的onClick方法，如下所示：
 >packages/apps/PackageInstaller/src/com/android/packageinstaller/PackageInstallerActivity.java
 ```java
@@ -366,7 +369,9 @@ public void commit(@NonNull IntentSender statusReceiver) {
 ```
 #### 总结：
 1. 将APK的信息通过IO流的形式写入到PackageInstaller.Session中。
-##4.Java框架层的处理
+
+4.Java框架层的处理
+---
 commit方法中会将包的信息封装为PackageInstallObserverAdapter ，它在PMS中被定义。
 >frameworks/base/services/core/java/com/android/server/pm/PackageInstallerSession.java
 ```java
@@ -456,6 +461,7 @@ public class PackageInstallObserver {
 #### 总结：
 1. 调用PackageInstaller.Session的commit方法，将APK的信息交由PMS处理。
 
-##5.PackageHandler处理安装消息
+5.PackageHandler处理安装消息
+---
 APK的信息交由PMS后，PMS通过向PackageHandler发送消息来驱动APK的复制和安装工作。
-![](res/drawble/PMS.png)
+![](https://github.com/1226632939/JavaLearning/blob/master/src/res/drawble/PMS.png)
