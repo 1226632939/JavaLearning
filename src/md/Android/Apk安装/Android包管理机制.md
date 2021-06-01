@@ -370,6 +370,8 @@ public void commit(@NonNull IntentSender statusReceiver) {
 #### 总结：
 1. 将APK的信息通过IO流的形式写入到PackageInstaller.Session中。
 
+------------------
+
 4.Java框架层的处理
 ---
 commit方法中会将包的信息封装为PackageInstallObserverAdapter ，它在PMS中被定义。
@@ -460,6 +462,8 @@ public class PackageInstallObserver {
 ```
 #### 总结：
 1. 调用PackageInstaller.Session的commit方法，将APK的信息交由PMS处理。
+
+--------------------------
 
 5.PackageHandler处理安装消息
 ---
@@ -984,9 +988,754 @@ installNewPackageLIF主要做了以下3件事：
 1. 扫描APK，将APK的信息存储在PackageParser.Package类型的newPackage中，一个Package的信息包含了1个base APK以及0个或者多个split APK。
 2. 更新该APK对应的Settings信息，Settings用于保存所有包的动态设置。
 3. 如果安装成功就为新安装的应用程序准备数据，安装失败就删除APK。
-####总结：
+#### 总结：
 1. PMS发送INIT_COPY和MCS_BOUND类型的消息，控制PackageHandler来绑定DefaultContainerService，完成复制APK等工作。
 2. 复制APK完成后，会开始进行安装APK的流程，包括安装前的检查、安装APK和安装后的收尾工作。
+--------
+
+8.PMS的创建过程
+---
+###8.1SyetemServer处理部分
+PMS是在SyetemServer进程中被创建的，SyetemServer进程用来创建系统服务，SyetemServer处理和AMS和WMS的创建过程是类似的.
+
+SyetemServer的入口main方法，main方法中只调用了SystemServer的run方法，如下所示。
+>frameworks/base/services/java/com/android/server/SystemServer.java
+```java
+public static void main(String[] args) {
+    new SystemServer().run();
+}
+        
+private void run() {
+    try {
+        ...
+        //创建消息Looper
+         Looper.prepareMainLooper();
+        //加载了动态库libandroid_servers.so
+        System.loadLibrary("android_servers");//1
+        performPendingShutdown();
+        // 创建系统的Context
+        createSystemContext();
+        // 创建SystemServiceManager
+        mSystemServiceManager = new SystemServiceManager(mSystemContext);//2
+        mSystemServiceManager.setRuntimeRestarted(mRuntimeRestart);
+        LocalServices.addService(SystemServiceManager.class, mSystemServiceManager);
+        SystemServerInitThreadPool.get();
+    } finally {
+        traceEnd(); 
+    }
+    try {
+        traceBeginAndSlog("StartServices");
+        //启动引导服务
+        startBootstrapServices();//3
+        //启动核心服务
+        startCoreServices();//4
+        //启动其他服务
+        startOtherServices();//5
+        SystemServerInitThreadPool.shutdown();
+    } catch (Throwable ex) {
+        Slog.e("System", "******************************************");
+        Slog.e("System", "************ Failure starting system services", ex);
+        throw ex;
+    } finally {
+        traceEnd();
+    }
+    ...
+}
+```
+在注释1处加载了动态库libandroid_servers.so。接下来在注释2处创建SystemServiceManager，它会对系统的服务进行创建、启动和生命周期管理。在注释3中的startBootstrapServices方法中用SystemServiceManager启动了ActivityManagerService、PowerManagerService、PackageManagerService等服务。在注释4处的startCoreServices方法中则启动了DropBoxManagerService、BatteryService、UsageStatsService和WebViewUpdateService。注释5处的startOtherServices方法中启动了CameraService、AlarmManagerService、VrManagerService等服务。这些服务的父类均为SystemService。从注释3、4、5的方法可以看出，官方把系统服务分为了三种类型，分别是引导服务、核心服务和其他服务，其中其他服务是一些非紧要和一些不需要立即启动的服务。这些系统服务总共有100多个，我们熟知的AMS属于引导服务，WMS属于其他服务，
+
+MS属于引导服务，因此这里列出引导服务以及它们的作用
+
+| 引导服务                  | 作用  | 
+| :----                   | :----:  | 
+| Installer               | 系统安装apk时的一个服务类，启动完成Installer服务之后才能启动其他的系统服务  | 
+| ActivityManagerService  | 负责四大组件的启动、切换、调度。  | 
+| PowerManagerService     | 计算系统中和Power相关的计算，然后决策系统应该如何反应  | 
+| LightsService           | 管理和显示背光LED  | 
+| DisplayManagerService   | 用来管理所有显示设备  | 
+| UserManagerService      | 多用户模式管理  | 
+| SensorService           | 为系统提供各种感应器服务  | 
+| PackageManagerService   | 用来对apk进行安装、解析、删除、卸载等等操作  | 
+
+查看启动引导服务的注释3处的startBootstrapServices方法。
+>frameworks/base/services/java/com/android/server/SystemServer.java
+```java
+private void startBootstrapServices() {
+    ...
+     String cryptState = SystemProperties.get("vold.decrypt");//1
+     if (ENCRYPTING_STATE.equals(cryptState)) {
+            Slog.w(TAG, "Detected encryption in progress - only parsing core apps");
+            mOnlyCore = true;
+        } else if (ENCRYPTED_STATE.equals(cryptState)) {
+            Slog.w(TAG, "Device encrypted - only parsing core apps");
+            mOnlyCore = true;
+        }
+    ...    
+    traceBeginAndSlog("StartPackageManagerService");
+    mPackageManagerService = PackageManagerService.main(mSystemContext, installer,
+            mFactoryTestMode != FactoryTest.FACTORY_TEST_OFF, mOnlyCore);//2
+    mFirstBoot = mPackageManagerService.isFirstBoot();//3
+    mPackageManager = mSystemContext.getPackageManager();
+    traceEnd();
+    ...
+}
+```
+注释1处读取init.rc的vold.decrypt属性，如果它的值为”trigger_restart_min_framework”，说明我们加密了设备，这时mOnlyCore的值为true，表示只运行“核心”程序，这是为了创建一个极简的启动环境。 
+
+注释2处的PMS的main方法主要用来创建PMS，注释3处获取boolean类型的变量mFirstBoot，它用于表示PMS是否首次被启动。mFirstBoot是后续WMS创建时所需要的参数，从这里就可以看出系统服务之间是有依赖关系的，它们的启动顺序不能随意被更改。
+
+###8.2PMS构造方法
+PMS的main方法如下所示。
+>frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java
+```java
+public static PackageManagerService main(Context context, Installer installer,
+         boolean factoryTest, boolean onlyCore) {
+     PackageManagerServiceCompilerMapping.checkProperties();
+     PackageManagerService m = new PackageManagerService(context, installer,
+             factoryTest, onlyCore);
+     m.enableSystemUserPackages();
+     ServiceManager.addService("package", m);
+     return m;
+ }
+```
+main方法主要做了两件事，一个是创建PMS对象，另一个是将PMS注册到ServiceManager中。
+PMS的构造方法大概有600多行，分为5个阶段，每个阶段会打印出相应的EventLog，EventLog用于打印Android系统的事件日志。
+
+1. BOOT_PROGRESS_PMS_START（开始阶段）
+2. BOOT_PROGRESS_PMS_SYSTEM_SCAN_START（扫描系统阶段）
+3. BOOT_PROGRESS_PMS_DATA_SCAN_START（扫描Data分区阶段）
+4. BOOT_PROGRESS_PMS_SCAN_END（扫描结束阶段）
+5. BOOT_PROGRESS_PMS_READY（准备阶段）
+
+####8.2.1开始阶段
+PMS的构造方法中会获取一些包管理需要属性，如下所示。
+>frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java
+```java
+public PackageManagerService(Context context, Installer installer,
+            boolean factoryTest, boolean onlyCore) {
+        LockGuard.installLock(mPackages, LockGuard.INDEX_PACKAGES);
+        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "create package manager");
+        //打印开始阶段日志
+        EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_START,
+                SystemClock.uptimeMillis())
+        ...
+        //用于存储屏幕的相关信息
+        mMetrics = new DisplayMetrics();
+        //Settings用于保存所有包的动态设置
+        mSettings = new Settings(mPackages);
+	    //在Settings中添加多个默认的sharedUserId
+        mSettings.addSharedUserLPw("android.uid.system", Process.SYSTEM_UID,
+                ApplicationInfo.FLAG_SYSTEM, ApplicationInfo.PRIVATE_FLAG_PRIVILEGED);//1
+        mSettings.addSharedUserLPw("android.uid.phone", RADIO_UID,
+                ApplicationInfo.FLAG_SYSTEM, ApplicationInfo.PRIVATE_FLAG_PRIVILEGED);
+        mSettings.addSharedUserLPw("android.uid.log", LOG_UID,
+                ApplicationInfo.FLAG_SYSTEM, ApplicationInfo.PRIVATE_FLAG_PRIVILEGED);
+        ...
+        mInstaller = installer;
+        //创建Dex优化工具类
+        mPackageDexOptimizer = new PackageDexOptimizer(installer, mInstallLock, context,
+                "*dexopt*");
+        mDexManager = new DexManager(this, mPackageDexOptimizer, installer, mInstallLock);
+        mMoveCallbacks = new MoveCallbacks(FgThread.get().getLooper());
+        mOnPermissionChangeListeners = new OnPermissionChangeListeners(
+                FgThread.get().getLooper());
+        getDefaultDisplayMetrics(context, mMetrics);
+        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "get system config");
+        //得到全局系统配置信息。
+        SystemConfig systemConfig = SystemConfig.getInstance();
+        //获取全局的groupId 
+        mGlobalGids = systemConfig.getGlobalGids();
+        //获取系统权限
+        mSystemPermissions = systemConfig.getSystemPermissions();
+        mAvailableFeatures = systemConfig.getAvailableFeatures();
+        Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+        mProtectedPackages = new ProtectedPackages(mContext);
+        //安装APK时需要的锁，保护所有对installd的访问。
+        synchronized (mInstallLock) {//1
+        //更新APK时需要的锁，保护内存中已经解析的包信息等内容
+        synchronized (mPackages) {//2
+            //创建后台线程ServiceThread
+            mHandlerThread = new ServiceThread(TAG,
+                    Process.THREAD_PRIORITY_BACKGROUND, true /*allowIo*/);
+            mHandlerThread.start();
+            //创建PackageHandler绑定到ServiceThread的消息队列
+            mHandler = new PackageHandler(mHandlerThread.getLooper());//3
+            mProcessLoggingHandler = new ProcessLoggingHandler();
+            //将PackageHandler添加到Watchdog的检测集中
+            Watchdog.getInstance().addThread(mHandler, WATCHDOG_TIMEOUT);//4
+
+            mDefaultPermissionPolicy = new DefaultPermissionGrantPolicy(this);
+            mInstantAppRegistry = new InstantAppRegistry(this);
+            //在Data分区创建一些目录
+            File dataDir = Environment.getDataDirectory();//5
+            mAppInstallDir = new File(dataDir, "app");
+            mAppLib32InstallDir = new File(dataDir, "app-lib");
+            mAsecInternalPath = new File(dataDir, "app-asec").getPath();
+            mDrmAppPrivateInstallDir = new File(dataDir, "app-private");
+            //创建多用户管理服务
+            sUserManager = new UserManagerService(context, this,
+                    new UserDataPreparer(mInstaller, mInstallLock, mContext, mOnlyCore), mPackages);
+             ...
+               mFirstBoot = !mSettings.readLPw(sUserManager.getUsers(false))//6
+          ...     
+}
+```
+在开始阶段中创建了很多PMS中的关键对象并赋值给PMS中的成员变量。
+>* mSettings ：用于保存所有包的动态设置。注释1处将系统进程的sharedUserId添加到Settings中，sharedUserId用于进程间共享数据，比如两个App的之间的数据是不共享的，如果它们有了共同的sharedUserId，就可以运行在同一个进程中共享数据。
+>* mInstaller ：Installer继承自SystemService，和PMS、AMS一样是系统的服务（虽然名称不像是服务），PMS很多的操作都是由Installer来完成的，比如APK的安装和卸载。在Installer内部，通过IInstalld和installd进行Binder通信，由位于nativie层的installd来完成具体的操作。
+>* systemConfig：用于得到全局系统配置信息。比如系统的权限就可以通过SystemConfig来获取。
+>* mPackageDexOptimizer ： Dex优化的工具类。
+>* mHandler（PackageHandler类型） ：PackageHandler继承自Handler，在注释3处它绑定了后台线程ServiceThread的消息队列。PMS通过PackageHandler驱动APK的复制和安装工作，具体的请看在Android包管理机制（三）PMS处理APK的安装这篇文章。
+>* PackageHandler处理的消息队列如果过于繁忙，有可能导致系统卡住， 因此在注释4处将它添加到Watchdog的监测集中。
+>* Watchdog主要有两个用途，一个是定时检测系统关键服务（AMS和WMS等）是否可能发生死锁，还有一个是定时检测线程的消息队列是否长时间处于工作状态（可能阻塞等待了很长时间）。如果出现上述问题，Watchdog会将日志保存起来，必要时还会杀掉自己所在的进程，也就是SystemServer进程。
+>* sUserManager（UserManagerService类型） ：多用户管理服务。 
+
+除了创建这些关键对象，在开始阶段还有一些关键代码需要去讲解：
+>* 注释1处和注释2处加了两个锁，其中mInstallLock是安装APK时需要的锁，保护所有对installd的访问；mPackages是更新APK时需要的锁，保护内存中已经解析的包信息等内容。
+>* 注释5处后的代码创建了一些Data分区中的子目录，比如/data/app。
+>* 注释6处会解析packages.xml等文件的信息，保存到Settings的对应字段中。packages.xml中记录系统中所有安装的应用信息，包括基本信息、签名和权限。如果packages.xml有安装的应用信息，那么注释6处Settings的readLPw方法会返回true，mFirstBoot的值为false，说明PMS不是首次被启动。
+
+####8.2.2扫描系统阶段
+```java
+...
+public PackageManagerService(Context context, Installer installer,
+            boolean factoryTest, boolean onlyCore) {
+...
+            //打印扫描系统阶段日志
+            EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_SYSTEM_SCAN_START,
+                    startTime);
+            ...
+            //在/system中创建framework目录
+            File frameworkDir = new File(Environment.getRootDirectory(), "framework");
+            ...
+            //扫描/vendor/overlay目录下的文件
+            scanDirTracedLI(new File(VENDOR_OVERLAY_DIR), mDefParseFlags
+                    | PackageParser.PARSE_IS_SYSTEM
+                    | PackageParser.PARSE_IS_SYSTEM_DIR
+                    | PackageParser.PARSE_TRUSTED_OVERLAY, scanFlags | SCAN_TRUSTED_OVERLAY, 0);
+            mParallelPackageParserCallback.findStaticOverlayPackages();
+            //扫描/system/framework 目录下的文件
+            scanDirTracedLI(frameworkDir, mDefParseFlags
+                    | PackageParser.PARSE_IS_SYSTEM
+                    | PackageParser.PARSE_IS_SYSTEM_DIR
+                    | PackageParser.PARSE_IS_PRIVILEGED,
+                    scanFlags | SCAN_NO_DEX, 0);
+            final File privilegedAppDir = new File(Environment.getRootDirectory(), "priv-app");
+            //扫描 /system/priv-app 目录下的文件
+            scanDirTracedLI(privilegedAppDir, mDefParseFlags
+                    | PackageParser.PARSE_IS_SYSTEM
+                    | PackageParser.PARSE_IS_SYSTEM_DIR
+                    | PackageParser.PARSE_IS_PRIVILEGED, scanFlags, 0);
+            final File systemAppDir = new File(Environment.getRootDirectory(), "app");
+            //扫描/system/app 目录下的文件
+            scanDirTracedLI(systemAppDir, mDefParseFlags
+                    | PackageParser.PARSE_IS_SYSTEM
+                    | PackageParser.PARSE_IS_SYSTEM_DIR, scanFlags, 0);
+            File vendorAppDir = new File("/vendor/app");
+            try {
+                vendorAppDir = vendorAppDir.getCanonicalFile();
+            } catch (IOException e) {
+                // failed to look up canonical path, continue with original one
+            }
+            //扫描 /vendor/app 目录下的文件
+            scanDirTracedLI(vendorAppDir, mDefParseFlags
+                    | PackageParser.PARSE_IS_SYSTEM
+                    | PackageParser.PARSE_IS_SYSTEM_DIR, scanFlags, 0);
+
+           //扫描/oem/app 目录下的文件
+            final File oemAppDir = new File(Environment.getOemDirectory(), "app");
+            scanDirTracedLI(oemAppDir, mDefParseFlags
+                    | PackageParser.PARSE_IS_SYSTEM
+                    | PackageParser.PARSE_IS_SYSTEM_DIR, scanFlags, 0);
+
+            //这个列表代表有可能有升级包的系统App
+            final List<String> possiblyDeletedUpdatedSystemApps = new ArrayList<String>();//1
+            if (!mOnlyCore) {
+                Iterator<PackageSetting> psit = mSettings.mPackages.values().iterator();
+                while (psit.hasNext()) {
+                    PackageSetting ps = psit.next();                 
+                    if ((ps.pkgFlags & ApplicationInfo.FLAG_SYSTEM) == 0) {
+                        continue;
+                    }
+                    //这里的mPackages的是PMS的成员变量，代表scanDirTracedLI方法扫描上面那些目录得到的 
+                    final PackageParser.Package scannedPkg = mPackages.get(ps.name);
+                    if (scannedPkg != null) {           
+                        if (mSettings.isDisabledSystemPackageLPr(ps.name)) {//2
+                           ...
+                            //将这个系统App的PackageSetting从PMS的mPackages中移除
+                            removePackageLI(scannedPkg, true);
+                            //将升级包的路径添加到mExpectingBetter列表中
+                            mExpectingBetter.put(ps.name, ps.codePath);
+                        }
+                        continue;
+                    }
+                   
+                    if (!mSettings.isDisabledSystemPackageLPr(ps.name)) {
+                       ...   
+                    } else {
+                        final PackageSetting disabledPs = mSettings.getDisabledSystemPkgLPr(ps.name);
+                        //这个系统App升级包信息在mDisabledSysPackages中,但是没有发现这个升级包存在
+                        if (disabledPs.codePath == null || !disabledPs.codePath.exists()) {//5
+                            possiblyDeletedUpdatedSystemApps.add(ps.name);//
+                        }
+                    }
+                }
+            }
+            ...        
+}
+```
+/system可以称作为System分区，里面主要存储谷歌和其他厂商提供的Android系统相关文件和框架。Android系统架构分为应用层、应用框架层、系统运行库层（Native 层）、硬件抽象层（HAL层）和Linux内核层，除了Linux内核层在Boot分区，其他层的代码都在System分区。下面列出 System分区的部分子目录。
+
+| 目录| 含义|
+| :-----: | :-----:|
+| app| 存放系统App，包括了谷歌内置的App也有厂商或者运营商提供的App |
+| framework| 存放应用框架层的jar包 |
+| priv-app| 存放特权App |
+| lib| 存放so文件 |
+| fonts| 存放系统字体文件 |
+| media| 存放系统的各种声音，比如铃声、提示音，以及系统启动播放的动画 |
+
+上面的代码还涉及到/vendor 目录，它用来存储厂商对Android系统的定制部分。
+
+系统扫描阶段的主要工作有以下3点：
+
+1. 创建/system的子目录，比如/system/framework、/system/priv-app和/system/app等等
+2. 扫描系统文件，比如/vendor/overlay、/system/framework、/system/app等等目录下的文件。
+3. 对扫描到的系统文件做后续处理。
+
+主要来说第3点，一次OTA升级对于一个系统App会有三种情况:
+* 这个系统APP无更新。
+* 这个系统APP有更新。
+* 新的OTA版本中，这个系统APP已经被删除。
+
+当系统App升级，PMS会将该系统App的升级包设置数据`PackageSetting`存储到`Settings`的`mDisabledSysPackages`列表中（具体见PMS的`replaceSystemPackageLIF`方法），`mDisabledSysPackages`的类型为`ArrayMap<String, PackageSetting>`。`mDisabledSysPackages`中的信息会被PMS保存到`packages.xml`中的`<updated-package>`标签下（具体见`Settings`的`writeDisabledSysPackageLPr`方法）。
+
+注释2处说明这个系统App有升级包，那么就将该系统App的`PackageSetting`从`mDisabledSysPackages`列表中移除，并将系统App的升级包的路径添加到`mExpectingBetter`列表中，`mExpectingBetter`的类型为`ArrayMap<String, File>`等待后续处理。
+
+注释5处如果这个系统App的升级包信息存储在`mDisabledSysPackages`列表中，但是没有发现这个升级包存在，则将它加入到`possiblyDeletedUpdatedSystemApps`列表中，意为“系统App的升级包可能被删除”，之所以是“可能”，是因为系统还没有扫描Data分区，只能暂放到`possiblyDeletedUpdatedSystemApps`列表中，等到扫描完Data分区后再做处理。
+
+###8.2.3扫描Data分区阶段
+```java
+public PackageManagerService(Context context, Installer installer,
+            boolean factoryTest, boolean onlyCore) {
+    ...        
+    mSettings.pruneSharedUsersLPw();
+    //如果没有加密设备，那么就开始扫描Data分区。
+    if (!mOnlyCore) {
+        //打印扫描Data分区阶段日志
+        EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_DATA_SCAN_START,
+                SystemClock.uptimeMillis());
+        //扫描/data/app目录下的文件       
+        scanDirTracedLI(mAppInstallDir, 0, scanFlags | SCAN_REQUIRE_KNOWN, 0);
+        //扫描/data/app-private目录下的文件   
+        scanDirTracedLI(mDrmAppPrivateInstallDir, mDefParseFlags
+                | PackageParser.PARSE_FORWARD_LOCK,
+                scanFlags | SCAN_REQUIRE_KNOWN, 0);
+        //扫描完Data分区后，处理possiblyDeletedUpdatedSystemApps列表
+        for (String deletedAppName : possiblyDeletedUpdatedSystemApps) {
+            PackageParser.Package deletedPkg = mPackages.get(deletedAppName);
+            // 从mSettings.mDisabledSysPackages变量中移除去此应用
+            mSettings.removeDisabledSystemPackageLPw(deletedAppName);
+            String msg;
+          //1：如果这个系统App的包信息不在PMS的变量mPackages中，说明是残留的App信息，后续会删除它的数据。
+            if (deletedPkg == null) {
+                msg = "Updated system package " + deletedAppName
+                        + " no longer exists; it's data will be wiped";
+                // Actual deletion of code and data will be handled by later
+                // reconciliation step
+            } else {
+            //2：如果这个系统App在mPackages中，说明是存在于Data分区，不属于系统App，那么移除其系统权限。
+                msg = "Updated system app + " + deletedAppName
+                        + " no longer present; removing system privileges for "
+                        + deletedAppName;
+                deletedPkg.applicationInfo.flags &= ~ApplicationInfo.FLAG_SYSTEM;
+                PackageSetting deletedPs = mSettings.mPackages.get(deletedAppName);
+                deletedPs.pkgFlags &= ~ApplicationInfo.FLAG_SYSTEM;
+            }
+            logCriticalInfo(Log.WARN, msg);
+        }
+         //遍历mExpectingBetter列表
+        for (int i = 0; i < mExpectingBetter.size(); i++) {
+            final String packageName = mExpectingBetter.keyAt(i);
+            if (!mPackages.containsKey(packageName)) {
+                //得到系统App的升级包路径
+                final File scanFile = mExpectingBetter.valueAt(i);
+                logCriticalInfo(Log.WARN, "Expected better " + packageName
+                        + " but never showed up; reverting to system");
+                int reparseFlags = mDefParseFlags;
+                //3：根据系统App所在的目录设置扫描的解析参数
+                if (FileUtils.contains(privilegedAppDir, scanFile)) {
+                    reparseFlags = PackageParser.PARSE_IS_SYSTEM
+                            | PackageParser.PARSE_IS_SYSTEM_DIR
+                            | PackageParser.PARSE_IS_PRIVILEGED;
+                } 
+                ...
+                //将packageName对应的包设置数据（PackageSetting）添加到mSettings的mPackages中
+                mSettings.enableSystemPackageLPw(packageName);//4
+                try {
+                    //扫描系统App的升级包
+                    scanPackageTracedLI(scanFile, reparseFlags, scanFlags, 0, null);//5
+                } catch (PackageManagerException e) {
+                    Slog.e(TAG, "Failed to parse original system package: "
+                            + e.getMessage());
+                }
+            }
+        }
+    }
+   //清除mExpectingBetter列表
+    mExpectingBetter.clear();
+...
+}
+```
+/data可以称为Data分区，它用来存储所有用户的个人数据和配置文件。下面列出Data分区部分子目录：
+
+| 目录| 含义|
+| :----: | :----:|
+| app| 存储用户自己安装的App|
+| data| 存储所有已安装的App数据的目录，每个App都有自己单独的子目录 |
+| app-private| App的私有存储空间 |
+| app-lib|存储所有App的Jni库 |
+| system| 存放系统配置文件 |
+| anr| 用于存储ANR发生时系统生成的traces.txt文件 |
+
+扫描Data分区阶段主要做了以下几件事：
+1. 扫描/data/app和/data/app-private目录下的文件。
+2. 遍历possiblyDeletedUpdatedSystemApps列表，注释1处如果这个系统App的包信息不在PMS的变量mPackages中，说明是残留的App信息，后续会删除它的数据。注释2处如果这个系统App的包信息在mPackages中，说明是存在于Data分区，不属于系统App，那么移除其系统权限。
+3. 遍历mExpectingBetter列表，注释3处根据系统App所在的目录设置扫描的解析参数，注释4处的方法内部会将packageName对应的包设置数据（PackageSetting）添加到mSettings的mPackages中。注释5处扫描系统App的升级包，最后清除mExpectingBetter列表。
+
+###8.2.4扫描结束阶段
+
+```java
+//打印扫描结束阶段日志
+EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_SCAN_END,
+                  SystemClock.uptimeMillis());
+          Slog.i(TAG, "Time to scan packages: "
+                  + ((SystemClock.uptimeMillis()-startTime)/1000f)
+                  + " seconds");
+          int updateFlags = UPDATE_PERMISSIONS_ALL;
+          // 如果当前平台SDK版本和上次启动时的SDK版本不同，重新更新APK的授权
+          if (ver.sdkVersion != mSdkVersion) {
+              Slog.i(TAG, "Platform changed from " + ver.sdkVersion + " to "
+                      + mSdkVersion + "; regranting permissions for internal storage");
+              updateFlags |= UPDATE_PERMISSIONS_REPLACE_PKG | UPDATE_PERMISSIONS_REPLACE_ALL;
+          }
+          updatePermissionsLPw(null, null, StorageManager.UUID_PRIVATE_INTERNAL, updateFlags);
+          ver.sdkVersion = mSdkVersion;
+         //如果是第一次启动或者是Android M升级后的第一次启动，需要初始化所有用户定义的默认首选App
+          if (!onlyCore && (mPromoteSystemApps || mFirstBoot)) {
+              for (UserInfo user : sUserManager.getUsers(true)) {
+                  mSettings.applyDefaultPreferredAppsLPw(this, user.id);
+                  applyFactoryDefaultBrowserLPw(user.id);
+                  primeDomainVerificationsLPw(user.id);
+              }
+          }
+         ...
+          //OTA后的第一次启动，会清除代码缓存目录。
+          if (mIsUpgrade && !onlyCore) {
+              Slog.i(TAG, "Build fingerprint changed; clearing code caches");
+              for (int i = 0; i < mSettings.mPackages.size(); i++) {
+                  final PackageSetting ps = mSettings.mPackages.valueAt(i);
+                  if (Objects.equals(StorageManager.UUID_PRIVATE_INTERNAL, ps.volumeUuid)) {
+                      clearAppDataLIF(ps.pkg, UserHandle.USER_ALL,
+                              StorageManager.FLAG_STORAGE_DE | StorageManager.FLAG_STORAGE_CE
+                                      | Installer.FLAG_CLEAR_CODE_CACHE_ONLY);
+                  }
+              }
+              ver.fingerprint = Build.FINGERPRINT;
+          }
+          ...
+         // 把Settings的内容保存到packages.xml中
+          mSettings.writeLPr();
+          Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+```
+扫描结束结束阶段主要做了以下几件事：
+
+1. 如果当前平台SDK版本和上次启动时的SDK版本不同，重新更新APK的授权。
+2. 如果是第一次启动或者是Android M升级后的第一次启动，需要初始化所有用户定义的默认首选App。
+3. OTA升级后的第一次启动，会清除代码缓存目录。
+4. 把Settings的内容保存到packages.xml中，这样此后PMS再次创建时会读到此前保存的Settings的内容。
+
+###8.2.5准备阶段
+```java
+    EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_READY,
+                SystemClock.uptimeMillis());
+    ... 
+    mInstallerService = new PackageInstallerService(context, this);//1
+    ...
+    Runtime.getRuntime().gc();//2
+    Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+    Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "loadFallbacks");
+    FallbackCategoryProvider.loadFallbacks();
+    Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+    mInstaller.setWarnIfHeld(mPackages);
+    LocalServices.addService(PackageManagerInternal.class, new PackageManagerInternalImpl());//3
+    Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+}
+```
+注释1处创建PackageInstallerService，PackageInstallerService是用于管理安装会话的服务，它会为每次安装过程分配一个SessionId,
+
+注释2处进行一次垃圾收集。注释3处将PackageManagerInternalImpl（PackageManager的本地服务）添加到LocalServices中，
+LocalServices用于存储运行在当前的进程中的本地服务。
+
+9.Apk解析分析
+---
+
+9.1引入PackageParser
+
+Android世界中有很多包，比如应用程序的APK，Android运行环境的JAR包（比如framework.jar）和组成Android系统的各种动态库so等等，由于包的种类和数量繁多，就需要进行包管理，但是包管理需要在内存中进行，而这些包都是以静态文件的形式存在的，就需要一个工具类将这些包转换为内存中的数据结构，这个工具就是包解析器PackageParser。
+
+安装APK时需要调用PMS的installPackageLI方法：
+>frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java
+```java
+private void installPackageLI(InstallArgs args, PackageInstalledInfo res) {
+    ...
+    PackageParser pp = new PackageParser();//1
+    pp.setSeparateProcesses(mSeparateProcesses);
+    pp.setDisplayMetrics(mMetrics);
+    pp.setCallback(mPackageParserCallback);
+    Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "parsePackage");
+    final PackageParser.Package pkg;
+    try {
+        pkg = pp.parsePackage(tmpPackageFile, parseFlags);//2
+    }
+    ...
+ }   
+```
+安装APK时，需要先在注释1处创建PackageParser，然后在注释2处调用PackageParser的parsePackage方法来解析APK。
+
+###9.2PackageParser解析Apk
+Android5.0引入了Split APK机制，这是为了解决65536上限以及APK安装包越来越大等问题。Split APK机制可以将一个APK，拆分成多个独立APK。
+
+在引入了Split APK机制后，APK有两种分类：
+* Single APK：安装文件为一个完整的APK，即base APK。Android称其为Monolithic。
+* Mutiple APK：安装文件在一个文件目录中，其内部有多个被拆分的APK，这些APK由一个 base APK和一个或多个split APK组成。Android称其为Cluster。
+
+PackageParser的parsePackage方法：
+>frameworks/base/core/java/android/content/pm/PackageParser.java
+```java
+public Package parsePackage(File packageFile, int flags, boolean useCaches)
+           throws PackageParserException {
+       Package parsed = useCaches ? getCachedResult(packageFile, flags) : null;
+       if (parsed != null) {
+           return parsed;
+       }
+       if (packageFile.isDirectory()) {//1
+           parsed = parseClusterPackage(packageFile, flags);
+       } else {
+           parsed = parseMonolithicPackage(packageFile, flags);
+       }
+       cacheResult(packageFile, flags, parsed);
+
+       return parsed;
+   }
+```
+注释1处，如果要解析的packageFile是一个目录，说明是Mutiple APK，就需要调用parseClusterPackage方法来解析，如果是Single APK则调用parseMonolithicPackage方法来解析。这里以复杂的parseClusterPackage方法为例，了解了这个方法，parseMonolithicPackage方法自然也看的懂。
+
+![](https://github.com/1226632939/JavaLearning/blob/master/src/res/drawble/PackageParser.png)
+
+>frameworks/base/core/java/android/content/pm/PackageParser.java
+```java
+private Package parseClusterPackage(File packageDir, int flags) throws PackageParserException {
+        final PackageLite lite = parseClusterPackageLite(packageDir, 0);//1
+       if (mOnlyCoreApps && !lite.coreApp) {//2
+           throw new PackageParserException(INSTALL_PARSE_FAILED_MANIFEST_MALFORMED,
+                   "Not a coreApp: " + packageDir);
+       }
+       ...
+       try {
+           final AssetManager assets = assetLoader.getBaseAssetManager();
+           final File baseApk = new File(lite.baseCodePath);
+           final Package pkg = parseBaseApk(baseApk, assets, flags);//3
+           if (pkg == null) {
+               throw new PackageParserException(INSTALL_PARSE_FAILED_NOT_APK,
+                       "Failed to parse base APK: " + baseApk);
+           }
+           if (!ArrayUtils.isEmpty(lite.splitNames)) {
+               final int num = lite.splitNames.length;//4
+               pkg.splitNames = lite.splitNames;
+               pkg.splitCodePaths = lite.splitCodePaths;
+               pkg.splitRevisionCodes = lite.splitRevisionCodes;
+               pkg.splitFlags = new int[num];
+               pkg.splitPrivateFlags = new int[num];
+               pkg.applicationInfo.splitNames = pkg.splitNames;
+               pkg.applicationInfo.splitDependencies = splitDependencies;
+               for (int i = 0; i < num; i++) {
+                   final AssetManager splitAssets = assetLoader.getSplitAssetManager(i);
+                   parseSplitApk(pkg, i, splitAssets, flags);//5
+               }
+           }
+           pkg.setCodePath(packageDir.getAbsolutePath());
+           pkg.setUse32bitAbi(lite.use32bitAbi);
+           return pkg;
+       } finally {
+           IoUtils.closeQuietly(assetLoader);
+       }
+   }
+```
+注释1处调用parseClusterPackageLite方法用于轻量级解析目录文件，之所以要轻量级解析是因为解析APK是一个复杂耗时的操作，这里的逻辑并不需要APK所有的信息。parseClusterPackageLite方法内部会通过parseApkLite方法解析每个Mutiple APK，得到每个Mutiple APK对应的ApkLite（轻量级APK信息），然后再将这些ApkLite封装为一个PackageLite（轻量级包信息）并返回。
+
+注释2处，mOnlyCoreApps用来指示PackageParser是否只解析“核心”应用，“核心”应用指的是AndroidManifest中属性coreApp值为true，只解析“核心”应用是为了创建一个极简的启动环境。mOnlyCoreApps在创建PMS时就一路传递过来，如果我们加密了设备，mOnlyCoreApps值就为true，具体的见Android包管理机制（四）PMS的创建过程这篇文章的第1小节。另外可以通过PackageParser的setOnlyCoreApps方法来设置mOnlyCoreApps的值。
+
+`lite.coreApp`表示当前包是否包含“核心”应用，如果不满足注释2的条件就会抛出异常。
+
+注释3处的parseBaseApk方法用于解析base APK，注释4处获取split APK的数量，根据这个数量在注释5处遍历调用parseSplitApk来解析每个split APK。这里主要查看parseBaseApk方法，如下所示。
+>frameworks/base/core/java/android/content/pm/PackageParser.java
+```java
+private Package parseBaseApk(File apkFile, AssetManager assets, int flags)
+           throws PackageParserException {
+       final String apkPath = apkFile.getAbsolutePath();
+       String volumeUuid = null;
+       if (apkPath.startsWith(MNT_EXPAND)) {
+           final int end = apkPath.indexOf('/', MNT_EXPAND.length());
+           volumeUuid = apkPath.substring(MNT_EXPAND.length(), end);//1
+       }
+       ...
+       Resources res = null;
+       XmlResourceParser parser = null;
+       try {
+           res = new Resources(assets, mMetrics, null);
+           parser = assets.openXmlResourceParser(cookie, ANDROID_MANIFEST_FILENAME);
+           final String[] outError = new String[1];
+           final Package pkg = parseBaseApk(apkPath, res, parser, flags, outError);//2
+           if (pkg == null) {
+               throw new PackageParserException(mParseError,
+                       apkPath + " (at " + parser.getPositionDescription() + "): " + outError[0]);
+           }
+           pkg.setVolumeUuid(volumeUuid);//3
+           pkg.setApplicationVolumeUuid(volumeUuid);//4
+           pkg.setBaseCodePath(apkPath);
+           pkg.setSignatures(null);
+           return pkg;
+       } catch (PackageParserException e) {
+           throw e;
+       }
+       ...
+   }
+```
+注释1处，如果APK的路径以/mnt/expand/开头，就截取该路径获取volumeUuid，注释3处用于以后标识这个解析后的Package，注释4处的用于标识该App所在的存储卷UUID。
+
+注释2处又调用了parseBaseApk的重载方法，可以看出当前的parseBaseApk方法主要是为了获取和设置volumeUuid。parseBaseApk的重载方法如下所示。
+>frameworks/base/core/java/android/content/pm/PackageParser.java
+```java
+private Package parseBaseApk(String apkPath, Resources res, XmlResourceParser parser, int flags,
+           String[] outError) throws XmlPullParserException, IOException {
+       ...
+       final Package pkg = new Package(pkgName);//1
+       //从资源中提取自定义属性集com.android.internal.R.styleable.AndroidManifest得到TypedArray 
+       TypedArray sa = res.obtainAttributes(parser,
+               com.android.internal.R.styleable.AndroidManifest);//2
+       //使用typedarray获取AndroidManifest中的versionCode赋值给Package的对应属性        
+       pkg.mVersionCode = pkg.applicationInfo.versionCode = sa.getInteger(
+               com.android.internal.R.styleable.AndroidManifest_versionCode, 0);
+       pkg.baseRevisionCode = sa.getInteger(
+               com.android.internal.R.styleable.AndroidManifest_revisionCode, 0);
+       pkg.mVersionName = sa.getNonConfigurationString(
+               com.android.internal.R.styleable.AndroidManifest_versionName, 0);
+       if (pkg.mVersionName != null) {
+           pkg.mVersionName = pkg.mVersionName.intern();
+       }
+       pkg.coreApp = parser.getAttributeBooleanValue(null, "coreApp", false);//3
+       //获取资源后要回收
+       sa.recycle();
+       return parseBaseApkCommon(pkg, null, res, parser, flags, outError);
+   }
+```
+
+注释1处创建了Package对象，注释2处从资源中提取自定义属性集 com.android.internal.R.styleable.AndroidManifest得到TypedArray ，这个属性集所在的源码位置为frameworks/base/core/res/res/values/attrs_manifest.xml。接着用TypedArray读取APK的AndroidManifest中的versionCode、revisionCode和versionName的值赋值给Package的对应的属性。
+
+注释3处读取APK的AndroidManifest中的coreApp的值。
+
+最后会调用parseBaseApkCommon方法，这个方法非常长，主要用来解析APK的AndroidManifest中的各个标签，比如application、permission、uses-sdk、feature-group等等，其中四大组件的标签在application标签下，解析application标签的方法为parseBaseApplication。
+>frameworks/base/core/java/android/content/pm/PackageParser.java
+```java
+  private boolean parseBaseApplication(Package owner, Resources res,
+            XmlResourceParser parser, int flags, String[] outError)
+        throws XmlPullParserException, IOException {
+        ...
+        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                && (type != XmlPullParser.END_TAG || parser.getDepth() > innerDepth)) {
+            if (type == XmlPullParser.END_TAG || type == XmlPullParser.TEXT) {
+                continue;
+            }
+            String tagName = parser.getName();
+            if (tagName.equals("activity")) {//1
+                Activity a = parseActivity(owner, res, parser, flags, outError, false,
+                        owner.baseHardwareAccelerated);//2
+                if (a == null) {
+                    mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
+                    return false;
+                }
+                owner.activities.add(a);//3
+            } else if (tagName.equals("receiver")) {
+                Activity a = parseActivity(owner, res, parser, flags, outError, true, false);
+                if (a == null) {
+                    mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
+                    return false;
+                }
+                owner.receivers.add(a);
+            } else if (tagName.equals("service")) {
+                Service s = parseService(owner, res, parser, flags, outError);
+                if (s == null) {
+                    mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
+                    return false;
+                }
+                owner.services.add(s);
+            } else if (tagName.equals("provider")) {
+                Provider p = parseProvider(owner, res, parser, flags, outError);
+                if (p == null) {
+                    mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
+                    return false;
+                }
+                owner.providers.add(p);
+             ...
+            } 
+        }
+     ...
+}
+```
+
+parseBaseApplication方法有近500行代码，这里只截取了解析四大组件相关的代码。注释1处如果标签名为activity，就调用注释2处的parseActivity方法解析activity标签并得到一个Activity对象（PackageParser的静态内部类），这个方法有300多行代码，解析一个activity标签就如此繁琐，activity标签只是Application中众多标签的一个，而Application只是AndroidManifest众多标签的一个，这让我们更加理解了为什么此前解析APK时要使用轻量级解析了。注释3处将解析得到的Activity对象保存在Package的列表activities中。其他的四大组件也是类似的逻辑。
+
+PackageParser解析APK的代码逻辑非常庞大，基本了解本文所讲的就足够了，如果有兴趣可以自行看源码。
+
+parseBaseApk方法主要的解析结构可以理解为以下简图。
+![](https://github.com/1226632939/JavaLearning/blob/master/src/res/drawble/PackageParserApk.png)
+
+###9.3.Package的数据结构
+
+包被解析后，最终在内存是Package，Package是PackageParser的内部类，它的部分成员变量如下所示。
+>frameworks/base/core/java/android/content/pm/PackageParser.java
+```java
+public final static class Package implements Parcelable {
+    public String packageName;
+    public String manifestPackageName;
+    public String[] splitNames;
+    public String volumeUuid;
+    public String codePath;
+    public String baseCodePath;
+    ...
+    public ApplicationInfo applicationInfo = new ApplicationInfo();
+    public final ArrayList<Permission> permissions = new ArrayList<Permission>(0);
+    public final ArrayList<PermissionGroup> permissionGroups = new ArrayList<PermissionGroup>(0);
+    public final ArrayList<Activity> activities = new ArrayList<Activity>(0);//1
+    public final ArrayList<Activity> receivers = new ArrayList<Activity>(0);
+    public final ArrayList<Provider> providers = new ArrayList<Provider>(0);
+    public final ArrayList<Service> services = new ArrayList<Service>(0);
+    public final ArrayList<Instrumentation> instrumentation = new ArrayList<Instrumentation>(0);
+...
+}
+```
+注释1处，activities列表中存储了类型为Activity的对象，需要注意的是这个Acticity并不是我们常用的那个Activity，而是PackageParser的静态内部类，Package中的其他列表也都是如此。Package的数据结构简图如下所示。
+
+![](https://github.com/1226632939/JavaLearning/blob/master/src/res/drawble/Package.png)
+
+从这个简图中可以发现Package的数据结构是如何设计的：
+
+>* Package中存有许多组件，比如Acticity、Provider、Permission等等，它们都继承基类Component。
+>* 每个组件都包含一个info数据，比如Activity类中包含了成员变量ActivityInfo，这个ActivityInfo才是真正的Activity数据。
+>* 四大组件的标签内可能包含<intent-filter>来过滤Intent信息，因此需要IntentInfo来保存组件的intent信息，组件基类Component依赖于IntentInfo，IntentInfo有三个子类ActivityIntentInfo、ServiceIntentInfo和ProviderIntentInfo，不同组件依赖的IntentInfo会有所不同，比如Activity继承自Component<ActivityIntentInfo> ，Permission继承自Component<IntentInfo> 。
+
+最终的解析的数据会封装到Package中，除此之外在解析过程中还有两个轻量级数据结构ApkLite和PackageLite，因为这两个数据和Package没有太大的关联就没有在上图中表示。
 
 
 
