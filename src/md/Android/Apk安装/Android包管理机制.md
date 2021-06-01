@@ -2,6 +2,10 @@
 ==================
 
 ------
+
+[TOC]
+
+
 1.PackageManager简介：
 ---
 他是PMS的管理类，用于想应用程序进程提供一些功能，PackageManager是一个抽象类，他的具体实现类为ApplicationPackageManager,ApplicationPackageManager中的方法会通过IpackageManager与AMS进行进程间通信，因此PackageManager所提供的功能最终是由PMS来实现的，这么设计主要用以是为了避免系统服务PMS直接被访问。PackageManager提供了一些功能，主要有以下几点：
@@ -995,7 +999,7 @@ installNewPackageLIF主要做了以下3件事：
 
 8.PMS的创建过程
 ---
-###8.1SyetemServer处理部分
+####8.1SyetemServer处理部分
 PMS是在SyetemServer进程中被创建的，SyetemServer进程用来创建系统服务，SyetemServer处理和AMS和WMS的创建过程是类似的.
 
 SyetemServer的入口main方法，main方法中只调用了SystemServer的run方法，如下所示。
@@ -1084,7 +1088,7 @@ private void startBootstrapServices() {
 
 注释2处的PMS的main方法主要用来创建PMS，注释3处获取boolean类型的变量mFirstBoot，它用于表示PMS是否首次被启动。mFirstBoot是后续WMS创建时所需要的参数，从这里就可以看出系统服务之间是有依赖关系的，它们的启动顺序不能随意被更改。
 
-###8.2PMS构造方法
+####8.2PMS构造方法
 PMS的main方法如下所示。
 >frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java
 ```java
@@ -1314,7 +1318,7 @@ public PackageManagerService(Context context, Installer installer,
 
 注释5处如果这个系统App的升级包信息存储在`mDisabledSysPackages`列表中，但是没有发现这个升级包存在，则将它加入到`possiblyDeletedUpdatedSystemApps`列表中，意为“系统App的升级包可能被删除”，之所以是“可能”，是因为系统还没有扫描Data分区，只能暂放到`possiblyDeletedUpdatedSystemApps`列表中，等到扫描完Data分区后再做处理。
 
-###8.2.3扫描Data分区阶段
+####8.2.3扫描Data分区阶段
 ```java
 public PackageManagerService(Context context, Installer installer,
             boolean factoryTest, boolean onlyCore) {
@@ -1403,7 +1407,7 @@ public PackageManagerService(Context context, Installer installer,
 2. 遍历possiblyDeletedUpdatedSystemApps列表，注释1处如果这个系统App的包信息不在PMS的变量mPackages中，说明是残留的App信息，后续会删除它的数据。注释2处如果这个系统App的包信息在mPackages中，说明是存在于Data分区，不属于系统App，那么移除其系统权限。
 3. 遍历mExpectingBetter列表，注释3处根据系统App所在的目录设置扫描的解析参数，注释4处的方法内部会将packageName对应的包设置数据（PackageSetting）添加到mSettings的mPackages中。注释5处扫描系统App的升级包，最后清除mExpectingBetter列表。
 
-###8.2.4扫描结束阶段
+####8.2.4扫描结束阶段
 
 ```java
 //打印扫描结束阶段日志
@@ -1455,7 +1459,7 @@ EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_SCAN_END,
 3. OTA升级后的第一次启动，会清除代码缓存目录。
 4. 把Settings的内容保存到packages.xml中，这样此后PMS再次创建时会读到此前保存的Settings的内容。
 
-###8.2.5准备阶段
+####8.2.5准备阶段
 ```java
     EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_READY,
                 SystemClock.uptimeMillis());
@@ -1480,7 +1484,7 @@ LocalServices用于存储运行在当前的进程中的本地服务。
 9.Apk解析分析
 ---
 
-9.1引入PackageParser
+####9.1引入PackageParser
 
 Android世界中有很多包，比如应用程序的APK，Android运行环境的JAR包（比如framework.jar）和组成Android系统的各种动态库so等等，由于包的种类和数量繁多，就需要进行包管理，但是包管理需要在内存中进行，而这些包都是以静态文件的形式存在的，就需要一个工具类将这些包转换为内存中的数据结构，这个工具就是包解析器PackageParser。
 
@@ -1503,7 +1507,7 @@ private void installPackageLI(InstallArgs args, PackageInstalledInfo res) {
 ```
 安装APK时，需要先在注释1处创建PackageParser，然后在注释2处调用PackageParser的parsePackage方法来解析APK。
 
-###9.2PackageParser解析Apk
+####9.2PackageParser解析Apk
 Android5.0引入了Split APK机制，这是为了解决65536上限以及APK安装包越来越大等问题。Split APK机制可以将一个APK，拆分成多个独立APK。
 
 在引入了Split APK机制后，APK有两种分类：
@@ -1531,7 +1535,9 @@ public Package parsePackage(File packageFile, int flags, boolean useCaches)
 ```
 注释1处，如果要解析的packageFile是一个目录，说明是Mutiple APK，就需要调用parseClusterPackage方法来解析，如果是Single APK则调用parseMonolithicPackage方法来解析。这里以复杂的parseClusterPackage方法为例，了解了这个方法，parseMonolithicPackage方法自然也看的懂。
 
+
 ![](https://github.com/1226632939/JavaLearning/blob/master/src/res/drawble/PackageParser.png)
+
 
 >frameworks/base/core/java/android/content/pm/PackageParser.java
 ```java
@@ -1699,9 +1705,12 @@ parseBaseApplication方法有近500行代码，这里只截取了解析四大组
 PackageParser解析APK的代码逻辑非常庞大，基本了解本文所讲的就足够了，如果有兴趣可以自行看源码。
 
 parseBaseApk方法主要的解析结构可以理解为以下简图。
+
+
 ![](https://github.com/1226632939/JavaLearning/blob/master/src/res/drawble/PackageParserApk.png)
 
-###9.3.Package的数据结构
+
+####9.3.Package的数据结构
 
 包被解析后，最终在内存是Package，Package是PackageParser的内部类，它的部分成员变量如下所示。
 >frameworks/base/core/java/android/content/pm/PackageParser.java
@@ -1727,7 +1736,9 @@ public final static class Package implements Parcelable {
 ```
 注释1处，activities列表中存储了类型为Activity的对象，需要注意的是这个Acticity并不是我们常用的那个Activity，而是PackageParser的静态内部类，Package中的其他列表也都是如此。Package的数据结构简图如下所示。
 
+
 ![](https://github.com/1226632939/JavaLearning/blob/master/src/res/drawble/Package.png)
+
 
 从这个简图中可以发现Package的数据结构是如何设计的：
 
