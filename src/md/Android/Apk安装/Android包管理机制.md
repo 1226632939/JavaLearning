@@ -335,27 +335,88 @@ InstallInstalling的onResume方法：
 InstallingAsyncTask的doInBackground方法中会根据包(APK)的Uri，将APK的信息通过IO流的形式写入到PackageInstaller.Session中。InstallingAsyncTask的onPostExecute方法:
 >packages/apps/PackageInstaller/src/com/android/packageinstaller/InstallInstalling.java
 ```java
-@Override
- protected void onPostExecute(PackageInstaller.Session session) {
-     if (session != null) {
-         Intent broadcastIntent = new Intent(BROADCAST_ACTION);
-         broadcastIntent.setPackage(
-                 getPackageManager().getPermissionControllerPackageName());
-         broadcastIntent.putExtra(EventResultPersister.EXTRA_ID, mInstallId);
-         // 创建了一个PendingIntent
-         PendingIntent pendingIntent = PendingIntent.getBroadcast(
-                 InstallInstalling.this,
-                 mInstallId,
-                 broadcastIntent,
-                 PendingIntent.FLAG_UPDATE_CURRENT);
-         // 将PendingIntent的IntentSender通过PackageInstaller.Session的commit方法发送出去
-         session.commit(pendingIntent.getIntentSender());//1
-         mCancelButton.setEnabled(false);
-         setFinishOnTouchOutside(false);
-     } else {
-         getPackageManager().getPackageInstaller().abandonSession(mSessionId);
-         if (!isCancelled()) {
-             launchFailure(PackageManager.INSTALL_FAILED_INVALID_APK, null);
+private final class InstallingAsyncTask extends AsyncTask<Void, Void,
+            PackageInstaller.Session> {
+        volatile boolean isDone;
+
+    @Override
+    protected PackageInstaller.Session doInBackground(Void... params) {
+        PackageInstaller.Session session;
+        try {
+            session = getPackageManager().getPackageInstaller().openSession(mSessionId);
+        } catch (IOException e) {
+            return null;
+        }
+
+        session.setStagingProgress(0);
+
+        try {
+            File file = new File(mPackageURI.getPath());
+
+            try (InputStream in = new FileInputStream(file)) {
+                long sizeBytes = file.length();
+                try (OutputStream out = session
+                        .openWrite("PackageInstaller", 0, sizeBytes)) {
+                    byte[] buffer = new byte[1024 * 1024];
+                    while (true) {
+                        int numRead = in.read(buffer);
+
+                        if (numRead == -1) {
+                            session.fsync(out);
+                            break;
+                        }
+
+                        if (isCancelled()) {
+                            session.close();
+                            break;
+                        }
+
+                        out.write(buffer, 0, numRead);
+                        if (sizeBytes > 0) {
+                            float fraction = ((float) numRead / (float) sizeBytes);
+                            session.addProgress(fraction);
+                        }
+                    }
+                }
+            }
+
+            return session;
+        } catch (IOException | SecurityException e) {
+            Log.e(LOG_TAG, "Could not write package", e);
+
+            session.close();
+
+            return null;
+        } finally {
+            synchronized (this) {
+                isDone = true;
+                notifyAll();
+            }
+        }
+    }
+
+    @Override
+     protected void onPostExecute(PackageInstaller.Session session) {
+         if (session != null) {
+             Intent broadcastIntent = new Intent(BROADCAST_ACTION);
+             broadcastIntent.setPackage(
+                     getPackageManager().getPermissionControllerPackageName());
+             broadcastIntent.putExtra(EventResultPersister.EXTRA_ID, mInstallId);
+             // 创建了一个PendingIntent
+             PendingIntent pendingIntent = PendingIntent.getBroadcast(
+                     InstallInstalling.this,
+                     mInstallId,
+                     broadcastIntent,
+                     PendingIntent.FLAG_UPDATE_CURRENT);
+             // 将PendingIntent的IntentSender通过PackageInstaller.Session的commit方法发送出去
+             session.commit(pendingIntent.getIntentSender());//1
+             mCancelButton.setEnabled(false);
+             setFinishOnTouchOutside(false);
+         } else {
+             getPackageManager().getPackageInstaller().abandonSession(mSessionId);
+             if (!isCancelled()) {
+                 launchFailure(PackageManager.INSTALL_FAILED_INVALID_APK, null);
+             }
          }
      }
  }
