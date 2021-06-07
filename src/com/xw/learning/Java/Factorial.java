@@ -1,4 +1,4 @@
-package com.xw.learning.dataStructure.Java;
+package com.xw.learning.Java;
 
 /**
  * @program: Learning

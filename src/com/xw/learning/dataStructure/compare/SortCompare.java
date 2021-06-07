@@ -1,6 +1,7 @@
 package com.xw.learning.dataStructure.compare;
 
 import com.xw.learning.dataStructure.sort.Insertion;
+import com.xw.learning.dataStructure.sort.Merge;
 import com.xw.learning.dataStructure.sort.Shell;
 import com.xw.learning.tools.Tools;
 
@@ -60,5 +61,18 @@ public class SortCompare {
         // 4 获取程序执行的时间并输出
         long time = end - start;
         Tools.log("插入排序所用时间 time = " + time+" 毫秒");
+    }
+
+    //测试归并排序
+    public static void testMerge(Integer[] a){
+        // 1 获取执行之前的时间
+        long start = System.currentTimeMillis();
+        // 2 执行算法代码
+        Merge.sort(a);
+        // 3 获取执行之后的时间
+        long end = System.currentTimeMillis();
+        // 4 获取程序执行的时间并输出
+        long time = end - start;
+        Tools.log("归并排序所用时间 time = " + time+" 毫秒");
     }
 }

@@ -1,11 +1,8 @@
 package com.xw.learning.dataStructure;
 
-import com.xw.learning.dataStructure.Java.Factorial;
 import com.xw.learning.dataStructure.compare.SortCompare;
-import com.xw.learning.dataStructure.sort.Bubble;
 import com.xw.learning.dataStructure.sort.Insertion;
-import com.xw.learning.dataStructure.sort.Select;
-import com.xw.learning.dataStructure.sort.Shell;
+import com.xw.learning.dataStructure.sort.Merge;
 import com.xw.learning.tools.Tools;
 
 import java.util.Arrays;
@@ -22,14 +19,19 @@ public class SortTest {
     static Integer[] b = {3,4,7,5,2,5,6,8,9,1};
     static Integer[] c;
     public static void onStart(){
-//        long index = Factorial.testFactorial(10);
-//        Tools.log("index = " + index);
+
+        loga();
+        logb();
+        logc();
+
     }
 
     private static void loga(){
 //        Bubble.sort(a);
 //        Select.scrt(a);
 //        Insertion.sort(a);
+        Merge.sort(a);
+        Tools.log("a : " + Arrays.toString(a));
     }
 
     private static void logb(){
@@ -37,13 +39,14 @@ public class SortTest {
     }
 
     private static void logc(){
-        try {
-            c = SortCompare.getInteager();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        //SortCompare.testShell(c);
-        //SortCompare.testInsertion(c);
-        //Tools.log("c = "+ Arrays.toString(c));
+//        try {
+//            c = SortCompare.getInteager();
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//        }
+        // SortCompare.testMerge(c);
+        // SortCompare.testShell(c);
+        // SortCompare.testInsertion(c);
+        // Tools.log("c = "+ Arrays.toString(c));
     }
 }
