@@ -1,8 +1,6 @@
-package com.xw.learning.dataStructure;
+package com.xw.learning.dataStructure.sort.test;
 
-import com.xw.learning.dataStructure.compare.SortCompare;
-import com.xw.learning.dataStructure.sort.Insertion;
-import com.xw.learning.dataStructure.sort.Merge;
+import com.xw.learning.dataStructure.sort.Quick;
 import com.xw.learning.tools.Tools;
 
 import java.util.Arrays;
@@ -30,7 +28,8 @@ public class SortTest {
 //        Bubble.sort(a);
 //        Select.scrt(a);
 //        Insertion.sort(a);
-        Merge.sort(a);
+//        Merge.sort(a);
+        Quick.sort(a);
         Tools.log("a : " + Arrays.toString(a));
     }
 

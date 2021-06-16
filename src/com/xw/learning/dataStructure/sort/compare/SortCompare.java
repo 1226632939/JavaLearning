@@ -1,4 +1,4 @@
-package com.xw.learning.dataStructure.compare;
+package com.xw.learning.dataStructure.sort.compare;
 
 import com.xw.learning.dataStructure.sort.Insertion;
 import com.xw.learning.dataStructure.sort.Merge;
